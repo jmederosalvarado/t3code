@@ -27,14 +27,15 @@ but are disabled in the personal fork's GitHub Actions settings.
 
 ## Desktop identity and updater
 
-Fork releases set these build-time values:
+The fork source fixes the desktop identity as:
 
-- `T3CODE_DESKTOP_APP_ID=com.jmederosalvarado.t3code`
-- `T3CODE_DESKTOP_PRODUCT_NAME=T3 Code JM`
-- `T3CODE_DESKTOP_UPDATE_REPOSITORY=jmederosalvarado/t3code`
-- `T3CODE_MACOS_ENABLE_PASSKEYS=false`
+- application ID `com.jmederosalvarado.t3code`
+- product name `T3 Code JM`
+- macOS passkeys disabled
 
-The last setting keeps Developer ID signing independent of the upstream Clerk passkey configuration.
+The release workflow sets `T3CODE_DESKTOP_UPDATE_REPOSITORY=jmederosalvarado/t3code`, using the
+upstream-supported build option to point Electron updates at the fork. Disabling macOS passkeys keeps
+Developer ID signing independent of the upstream Clerk configuration.
 
 ## macOS signing
 

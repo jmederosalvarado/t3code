@@ -25,7 +25,6 @@ import {
   renderMacRuntimeEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
-  resolveMacPasskeysEnabled,
   resolveDesktopRuntimeDependencies,
   resolveFffNativeDependencies,
   resolveBuildOptions,
@@ -87,9 +86,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code JM");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
-    assert.equal(resolveDesktopProductName("1.0.42", " T3 Code JM "), "T3 Code JM");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -358,7 +356,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "com.jmederosalvarado.t3code",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -378,24 +376,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.jmederosalvarado.t3code</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
   });
 
-  it("supports fork app ids and signed macOS builds without passkey infrastructure", () => {
-    const configuration = resolveMacPasskeySigningConfiguration({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
-      T3CODE_DESKTOP_APP_ID: "com.jmederosalvarado.t3code",
-    });
+  it("renders signed macOS runtime entitlements without passkey infrastructure", () => {
     const runtimeEntitlements = renderMacRuntimeEntitlements();
 
-    assert.equal(configuration.appId, "com.jmederosalvarado.t3code");
-    assert.isFalse(resolveMacPasskeysEnabled({ T3CODE_MACOS_ENABLE_PASSKEYS: " FALSE " }));
-    assert.isTrue(resolveMacPasskeysEnabled({}));
     assert.include(runtimeEntitlements, "<key>com.apple.security.cs.allow-jit</key>");
     assert.notInclude(runtimeEntitlements, "com.apple.developer.associated-domains");
   });
@@ -489,41 +478,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       });
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.appId, "com.jmederosalvarado.t3code");
+      assert.equal(config.productName, "T3 Code JM");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.deepStrictEqual(mac.protocols, [
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
       ]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
-  );
-
-  it.effect("applies fork-specific desktop identity overrides", () =>
-    Effect.gen(function* () {
-      const config = yield* createBuildConfig(
-        "mac",
-        "dmg",
-        "1.0.42",
-        false,
-        false,
-        undefined,
-        undefined,
-      );
-
-      assert.equal(config.appId, "com.jmederosalvarado.t3code");
-      assert.equal(config.productName, "T3 Code JM");
-    }).pipe(
-      Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: {
-              T3CODE_DESKTOP_APP_ID: "com.jmederosalvarado.t3code",
-              T3CODE_DESKTOP_PRODUCT_NAME: "T3 Code JM",
-            },
-          }),
-        ),
-      ),
-    ),
   );
 
   it.effect("keeps runtime entitlements without a provisioning profile", () =>

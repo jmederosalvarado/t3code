@@ -65,10 +65,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
-      T3CODE_DESKTOP_APP_ID: com.jmederosalvarado.t3code
-      T3CODE_DESKTOP_PRODUCT_NAME: T3 Code JM
       T3CODE_DESKTOP_UPDATE_REPOSITORY: jmederosalvarado/t3code
-      T3CODE_MACOS_ENABLE_PASSKEYS: "false"
     strategy:
       fail-fast: false
       matrix:
