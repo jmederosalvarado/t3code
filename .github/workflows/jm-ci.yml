@@ -1,0 +1,53 @@
+name: JM CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jm-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify fork desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Check
+        run: vp check
+
+      - name: Typecheck desktop release packages
+        run: vp run --filter @t3tools/desktop --filter t3 --filter @t3tools/web typecheck
+
+      - name: Build desktop pipeline
+        run: vp run build:desktop
+
+      - name: Test fork release behavior
+        run: >-
+          vp test run
+          scripts/build-desktop-artifact.test.ts
+          apps/desktop/src/electron/ElectronUpdater.test.ts
+          apps/desktop/src/updates/DesktopUpdates.test.ts
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts
