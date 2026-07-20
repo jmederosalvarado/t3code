@@ -1,0 +1,187 @@
+name: JM Upstream Rebase
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+
+concurrency:
+  group: jm-upstream-rebase
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    name: Rebase custom patch stack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch fork base and source upstream
+        run: |
+          git remote add source https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            +refs/heads/upstream:refs/remotes/origin/upstream
+          git fetch --no-tags source \
+            +refs/heads/main:refs/remotes/source/main
+
+      - id: rebase
+        name: Rebase fork commits onto upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          old_main="$(git rev-parse origin/main)"
+          old_upstream="$(git rev-parse origin/upstream)"
+          new_upstream="$(git rev-parse refs/remotes/source/main)"
+
+          {
+            echo "old_main=$old_main"
+            echo "old_upstream=$old_upstream"
+            echo "new_upstream=$new_upstream"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$old_upstream" == "$new_upstream" ]]; then
+            {
+              echo "changed=false"
+              echo "conflict=false"
+            } >> "$GITHUB_OUTPUT"
+            echo "Fork already uses upstream $new_upstream."
+            exit 0
+          fi
+
+          if ! git merge-base --is-ancestor "$old_upstream" "$old_main"; then
+            echo "The recorded upstream base is not an ancestor of fork main." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create jm-rebase-candidate "$old_main"
+
+          if git rebase --onto "$new_upstream" "$old_upstream"; then
+            {
+              echo "changed=true"
+              echo "conflict=false"
+              echo "candidate_sha=$(git rev-parse HEAD)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --name-only --diff-filter=U > "$RUNNER_TEMP/jm-rebase-conflicts.txt"
+          git rebase --abort
+          {
+            echo "changed=true"
+            echo "conflict=true"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report rebase conflict
+        if: steps.rebase.outputs.conflict == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD_UPSTREAM: ${{ steps.rebase.outputs.old_upstream }}
+          NEW_UPSTREAM: ${{ steps.rebase.outputs.new_upstream }}
+        run: |
+          set -euo pipefail
+          title="Automated upstream rebase blocked at ${NEW_UPSTREAM:0:12}"
+          body_file="$RUNNER_TEMP/jm-rebase-issue.md"
+          {
+            echo "The fork patch stack could not be rebased automatically."
+            echo
+            echo "- Previous upstream: \`$OLD_UPSTREAM\`"
+            echo "- New upstream: \`$NEW_UPSTREAM\`"
+            echo "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "Conflicting files:"
+            echo '```text'
+            cat "$RUNNER_TEMP/jm-rebase-conflicts.txt"
+            echo '```'
+          } > "$body_file"
+
+          issue_number="$(
+            gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty'
+          )"
+          if [[ -n "$issue_number" ]]; then
+            gh issue comment "$issue_number" --body-file "$body_file"
+          else
+            gh issue create --title "$title" --body-file "$body_file"
+          fi
+
+      - name: Stop after rebase conflict
+        if: steps.rebase.outputs.conflict == 'true'
+        run: exit 1
+
+      - name: Setup Vite+
+        if: steps.rebase.outputs.changed == 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        if: steps.rebase.outputs.changed == 'true'
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Check rebased tree
+        if: steps.rebase.outputs.changed == 'true'
+        run: vp check
+
+      - name: Typecheck desktop release packages
+        if: steps.rebase.outputs.changed == 'true'
+        run: vp run --filter @t3tools/desktop --filter t3 --filter @t3tools/web typecheck
+
+      - name: Build desktop pipeline
+        if: steps.rebase.outputs.changed == 'true'
+        run: vp run build:desktop
+
+      - name: Test fork release behavior
+        if: steps.rebase.outputs.changed == 'true'
+        run: >-
+          vp test run
+          scripts/build-desktop-artifact.test.ts
+          apps/desktop/src/electron/ElectronUpdater.test.ts
+          apps/desktop/src/updates/DesktopUpdates.test.ts
+
+      - name: Exercise release-only workflow steps
+        if: steps.rebase.outputs.changed == 'true'
+        run: node scripts/release-smoke.ts
+
+      - name: Atomically update fork main and upstream base
+        if: steps.rebase.outputs.changed == 'true'
+        shell: bash
+        env:
+          OLD_MAIN: ${{ steps.rebase.outputs.old_main }}
+          OLD_UPSTREAM: ${{ steps.rebase.outputs.old_upstream }}
+          NEW_UPSTREAM: ${{ steps.rebase.outputs.new_upstream }}
+        run: |
+          set -euo pipefail
+          git branch --force jm-upstream-track "$NEW_UPSTREAM"
+          git push --atomic \
+            --force-with-lease=refs/heads/main:"$OLD_MAIN" \
+            --force-with-lease=refs/heads/upstream:"$OLD_UPSTREAM" \
+            origin \
+            HEAD:refs/heads/main \
+            jm-upstream-track:refs/heads/upstream
+
+      - name: Dispatch release for rebased main
+        if: steps.rebase.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.rebase.outputs.candidate_sha }}
+        run: >-
+          gh workflow run jm-release.yml
+          --ref main
+          -f expected_sha="$CANDIDATE_SHA"
+          -f source=upstream-rebase

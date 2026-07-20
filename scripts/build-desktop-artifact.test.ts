@@ -22,8 +22,10 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   renderMacPasskeyEntitlements,
+  renderMacRuntimeEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
+  resolveMacPasskeysEnabled,
   resolveDesktopRuntimeDependencies,
   resolveFffNativeDependencies,
   resolveBuildOptions,
@@ -87,6 +89,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    assert.equal(resolveDesktopProductName("1.0.42", " T3 Code JM "), "T3 Code JM");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -381,6 +384,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
   });
 
+  it("supports fork app ids and signed macOS builds without passkey infrastructure", () => {
+    const configuration = resolveMacPasskeySigningConfiguration({
+      T3CODE_APPLE_TEAM_ID: "ABC1234567",
+      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+      T3CODE_DESKTOP_APP_ID: "com.jmederosalvarado.t3code",
+    });
+    const runtimeEntitlements = renderMacRuntimeEntitlements();
+
+    assert.equal(configuration.appId, "com.jmederosalvarado.t3code");
+    assert.isFalse(resolveMacPasskeysEnabled({ T3CODE_MACOS_ENABLE_PASSKEYS: " FALSE " }));
+    assert.isTrue(resolveMacPasskeysEnabled({}));
+    assert.include(runtimeEntitlements, "<key>com.apple.security.cs.allow-jit</key>");
+    assert.notInclude(runtimeEntitlements, "com.apple.developer.associated-domains");
+  });
+
   it("rejects incomplete macOS passkey signing configuration", () => {
     const captureError = (env: Readonly<Record<string, string | undefined>>) => {
       try {
@@ -476,6 +495,46 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(mac.protocols, [
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
       ]);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("applies fork-specific desktop identity overrides", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.0.42",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.equal(config.appId, "com.jmederosalvarado.t3code");
+      assert.equal(config.productName, "T3 Code JM");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              T3CODE_DESKTOP_APP_ID: "com.jmederosalvarado.t3code",
+              T3CODE_DESKTOP_PRODUCT_NAME: "T3 Code JM",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("keeps runtime entitlements without a provisioning profile", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig("mac", "dmg", "1.0.42", true, false, undefined, {
+        entitlementsPath: "/tmp/entitlements.mac.plist",
+      });
+
+      const mac = config.mac as Record<string, unknown>;
+      assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.notProperty(mac, "provisioningProfile");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
