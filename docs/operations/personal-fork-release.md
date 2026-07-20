@@ -19,18 +19,17 @@ Custom pull requests should use **Rebase and merge** so the patch stack stays li
 
 - `jm-ci.yml` verifies custom pull requests.
 - `jm-upstream-rebase.yml` performs the guarded upstream rebase and dispatches a nightly release.
-- `jm-release.yml` publishes macOS arm64, macOS x64, and Linux x64 artifacts to
-  `jmederosalvarado/t3code` GitHub Releases.
+- `jm-release.yml` publishes macOS arm64 and macOS x64 artifacts to `jmederosalvarado/t3code`
+  GitHub Releases.
 
 Pushes and custom pull-request merges to `main` publish stable releases such as `1.0.42`, mark them
-latest on GitHub, and update the Linux `latest` channel. Successful automated upstream rebases publish
-nightly prereleases such as `1.0.43-nightly.20260720.43` and update the separate Linux `nightly`
-channel. Either channel can also be dispatched manually from GitHub Actions.
+latest on GitHub, and successful automated upstream rebases publish nightly prereleases such as
+`1.0.43-nightly.20260720.43`. Either channel can also be dispatched manually from GitHub Actions.
 
 The upstream CI, release, relay, and mobile workflows remain checked in to minimize rebase conflicts,
 but are disabled in the personal fork's GitHub Actions settings.
 
-## Desktop identity and updater
+## Desktop identity and releases
 
 The fork source fixes the desktop identity as:
 
@@ -38,9 +37,9 @@ The fork source fixes the desktop identity as:
 - product name `T3 Code JM`
 - macOS passkey signing unused
 
-Linux AppImage builds use `T3CODE_DESKTOP_UPDATE_REPOSITORY=jmederosalvarado/t3code`, pointing
-automatic updates at the fork through the upstream-supported build option. macOS builds intentionally
-omit update metadata because unsigned macOS applications cannot install automatic updates.
+macOS builds intentionally omit automatic-update metadata because unsigned macOS applications cannot
+install automatic updates. Stable and nightly builds are both downloaded manually from the fork's
+GitHub Releases page.
 
 ## macOS installation and updates
 
@@ -50,7 +49,7 @@ the new DMG and replace the existing application.
 
 On first launch, macOS Gatekeeper will identify the application as coming from an unidentified
 developer. Only after verifying the release source, use **System Settings > Privacy & Security > Open
-Anyway** to approve it. Linux AppImage releases continue to support in-app automatic updates.
+Anyway** to approve it.
 
 ## Manual conflict recovery
 
