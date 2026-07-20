@@ -1,0 +1,277 @@
+name: JM Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jm-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Resolve release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      should_release: ${{ steps.meta.outputs.should_release }}
+      channel: ${{ steps.meta.outputs.channel }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      name: ${{ steps.meta.outputs.name }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      make_latest: ${{ steps.meta.outputs.make_latest }}
+      ref: ${{ steps.meta.outputs.ref }}
+      upstream_tag: ${{ steps.meta.outputs.upstream_tag }}
+      upstream_sha: ${{ steps.meta.outputs.upstream_sha }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - id: meta
+        name: Resolve release metadata from synced upstream
+        shell: bash
+        env:
+          SOURCE_REPOSITORY: pingdotgg/t3code
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin \
+            +refs/heads/upstream:refs/remotes/origin/upstream
+          release_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse origin/upstream)"
+
+          if ! git merge-base --is-ancestor "$upstream_sha" "$release_sha"; then
+            echo "Synced upstream commit $upstream_sha is not an ancestor of $release_sha." >&2
+            exit 1
+          fi
+
+          declare -A peeled=()
+          declare -A lightweight=()
+          while IFS=$'\t' read -r sha ref; do
+            if [[ "$ref" == *'^{}' ]]; then
+              peeled["${ref%^{}}"]="$sha"
+            else
+              lightweight["$ref"]="$sha"
+            fi
+          done < <(git ls-remote --tags "https://github.com/${SOURCE_REPOSITORY}.git")
+
+          upstream_tag=""
+          while read -r ref; do
+            tag="${ref#refs/tags/}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              continue
+            fi
+            commit="${peeled[$ref]:-${lightweight[$ref]}}"
+            if [[ "$commit" == "$upstream_sha" ]]; then
+              upstream_tag="$tag"
+              break
+            fi
+          done < <(printf '%s\n' "${!lightweight[@]}" | LC_ALL=C sort)
+
+          if [[ -z "$upstream_tag" ]]; then
+            echo "No upstream release tag on ${SOURCE_REPOSITORY} points at $upstream_sha." >&2
+            exit 1
+          fi
+
+          version="${upstream_tag#v}"
+          fork_tag="jm-v${version}"
+          if [[ "$upstream_tag" == *-nightly.* ]]; then
+            channel=nightly
+            name="T3 Code JM Nightly $version"
+            prerelease=true
+            make_latest=false
+          else
+            channel=stable
+            name="T3 Code JM v$version"
+            prerelease=false
+            make_latest=true
+          fi
+
+          upstream_prerelease="$(
+            gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${upstream_tag}" --jq '.prerelease' \
+              || echo false
+          )"
+          if [[ "$upstream_prerelease" == true ]]; then
+            prerelease=true
+            make_latest=false
+          fi
+
+          should_release=true
+          if git ls-remote --exit-code origin "refs/tags/${fork_tag}" >/dev/null 2>&1; then
+            git fetch --no-tags origin "+refs/tags/${fork_tag}:refs/tags/${fork_tag}"
+            existing_commit="$(git rev-parse "${fork_tag}^{commit}")"
+            if [[ "$existing_commit" == "$release_sha" ]] \
+              && gh release view "$fork_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              should_release=false
+              echo "Skipping: $fork_tag already publishes $release_sha."
+            fi
+          fi
+
+          {
+            echo "should_release=$should_release"
+            echo "channel=$channel"
+            echo "version=$version"
+            echo "tag=$fork_tag"
+            echo "name=$name"
+            echo "prerelease=$prerelease"
+            echo "make_latest=$make_latest"
+            echo "ref=$release_sha"
+            echo "upstream_tag=$upstream_tag"
+            echo "upstream_sha=$upstream_sha"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: preflight
+    if: needs.preflight.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            runner: macos-26
+            platform: mac
+            target: dmg
+            arch: arm64
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Build desktop artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --platform "${{ matrix.platform }}"
+            --target "${{ matrix.target }}"
+            --arch "${{ matrix.arch }}"
+            --build-version "${{ needs.preflight.outputs.version }}"
+            --verbose
+          )
+
+          vp run dist:desktop:artifact "${args[@]}"
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for pattern in \
+            "release/*.dmg" \
+            "release/*.zip"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: jm-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [preflight, build]
+    if: needs.preflight.outputs.should_release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: jm-desktop-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Create release notes
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_CHANNEL: ${{ needs.preflight.outputs.channel }}
+          RELEASE_SHA: ${{ needs.preflight.outputs.ref }}
+          UPSTREAM_TAG: ${{ needs.preflight.outputs.upstream_tag }}
+          UPSTREAM_SHA: ${{ needs.preflight.outputs.upstream_sha }}
+          RELEASE_SOURCE: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/jm-release-notes.md"
+          {
+            echo "Personal T3 Code build based on the latest synchronized upstream source."
+            echo
+            echo "- Fork version: \`$VERSION\`"
+            echo "- Channel: \`$RELEASE_CHANNEL\`"
+            echo "- Fork commit: \`$RELEASE_SHA\`"
+            echo "- Upstream commit: \`$UPSTREAM_SHA\`"
+            echo "- Upstream release: [\`$UPSTREAM_TAG\`](https://github.com/pingdotgg/t3code/releases/tag/$UPSTREAM_TAG)"
+            echo "- Trigger: \`$RELEASE_SOURCE\`"
+            echo
+            echo "### Custom patch stack"
+            echo
+            # shellcheck disable=SC2016
+            git log --format='- %s (`%h`)' "${UPSTREAM_SHA}..${RELEASE_SHA}"
+          } > "$notes"
+          echo "notes=$notes" >> "$GITHUB_ENV"
+
+      - name: Replace existing release tag if present
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          elif git ls-remote --exit-code origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git push origin ":refs/tags/${TAG}"
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          name: ${{ needs.preflight.outputs.name }}
+          body_path: ${{ env.notes }}
+          prerelease: ${{ needs.preflight.outputs.prerelease }}
+          make_latest: ${{ needs.preflight.outputs.make_latest }}
+          files: |
+            release-assets/*.dmg
+            release-assets/*.zip
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}
