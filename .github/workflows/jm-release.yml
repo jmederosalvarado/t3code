@@ -1,9 +1,6 @@
 name: JM Release
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       channel:
@@ -14,10 +11,23 @@ on:
         options:
           - stable
           - nightly
+      version:
+        description: Exact version to publish; upstream mirrors pass the upstream version
+        required: false
+        type: string
       expected_sha:
         description: Exact fork commit to release
         required: false
         type: string
+      upstream_tag:
+        description: Source upstream release tag
+        required: false
+        type: string
+      upstream_prerelease:
+        description: Preserve the upstream GitHub prerelease flag
+        required: false
+        default: false
+        type: boolean
       source:
         description: Release trigger source
         required: false
@@ -56,7 +66,9 @@ jobs:
         shell: bash
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          REQUESTED_VERSION: ${{ inputs.version }}
           RELEASE_CHANNEL: ${{ inputs.channel || 'stable' }}
+          UPSTREAM_PRERELEASE: ${{ inputs.upstream_prerelease }}
         run: |
           set -euo pipefail
           release_sha="$(git rev-parse HEAD)"
@@ -65,25 +77,40 @@ jobs:
             exit 1
           fi
 
+          if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+            version="${REQUESTED_VERSION#v}"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid release version: $REQUESTED_VERSION" >&2
+              exit 1
+            fi
+          else
+            version="1.0.${GITHUB_RUN_NUMBER}"
+            if [[ "$RELEASE_CHANNEL" == nightly ]]; then
+              nightly_date="$(date -u +%Y%m%d)"
+              version="$version-nightly.${nightly_date}.${GITHUB_RUN_NUMBER}"
+            fi
+          fi
+
           case "$RELEASE_CHANNEL" in
             stable)
-              version="1.0.${GITHUB_RUN_NUMBER}"
               name="T3 Code JM v$version"
-              prerelease=false
-              make_latest=true
               ;;
             nightly)
-              nightly_date="$(date -u +%Y%m%d)"
-              version="1.0.${GITHUB_RUN_NUMBER}-nightly.${nightly_date}.${GITHUB_RUN_NUMBER}"
               name="T3 Code JM Nightly $version"
-              prerelease=true
-              make_latest=false
               ;;
             *)
               echo "Unsupported release channel: $RELEASE_CHANNEL" >&2
               exit 1
               ;;
           esac
+
+          if [[ "$RELEASE_CHANNEL" == nightly || "$UPSTREAM_PRERELEASE" == true ]]; then
+            prerelease=true
+            make_latest=false
+          else
+            prerelease=false
+            make_latest=true
+          fi
 
           {
             echo "channel=$RELEASE_CHANNEL"
@@ -197,6 +224,7 @@ jobs:
           RELEASE_CHANNEL: ${{ needs.preflight.outputs.channel }}
           RELEASE_SHA: ${{ needs.preflight.outputs.ref }}
           RELEASE_SOURCE: ${{ inputs.source || github.event_name }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin \
@@ -210,6 +238,9 @@ jobs:
             echo "- Channel: \`$RELEASE_CHANNEL\`"
             echo "- Fork commit: \`$RELEASE_SHA\`"
             echo "- Upstream commit: \`$upstream_sha\`"
+            if [[ -n "${UPSTREAM_TAG:-}" ]]; then
+              echo "- Upstream release: [\`$UPSTREAM_TAG\`](https://github.com/pingdotgg/t3code/releases/tag/$UPSTREAM_TAG)"
+            fi
             echo "- Trigger: \`$RELEASE_SOURCE\`"
             echo
             echo "### Custom patch stack"

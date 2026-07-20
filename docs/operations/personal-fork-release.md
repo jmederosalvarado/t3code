@@ -18,13 +18,18 @@ Custom pull requests should use **Rebase and merge** so the patch stack stays li
 ## Workflows
 
 - `jm-ci.yml` verifies custom pull requests.
-- `jm-upstream-rebase.yml` performs the guarded upstream rebase and dispatches a nightly release.
+- `jm-upstream-rebase.yml` polls upstream GitHub Releases every 15 minutes, rebases onto the exact
+  release tag commit, and dispatches the matching fork release.
 - `jm-release.yml` publishes macOS arm64 and macOS x64 artifacts to `jmederosalvarado/t3code`
   GitHub Releases.
 
-Pushes and custom pull-request merges to `main` publish stable releases such as `1.0.42`, mark them
-latest on GitHub, and successful automated upstream rebases publish nightly prereleases such as
-`1.0.43-nightly.20260720.43`. Either channel can also be dispatched manually from GitHub Actions.
+Each upstream release after the recorded bootstrap checkpoint is mirrored in publication order. An
+upstream nightly such as `v0.0.29-nightly.20260720.858` produces
+`jm-v0.0.29-nightly.20260720.858`; a stable `v0.0.29` produces `jm-v0.0.29`. The fork release uses
+the same version and prerelease status, but its commit contains the custom patch stack rebased onto the
+exact upstream tag commit. Custom pull-request merges do not create independent releases.
+The bootstrap checkpoint is upstream nightly `v0.0.29-nightly.20260720.857`, making nightly `858`
+the first release eligible for mirroring.
 
 The upstream CI, release, relay, and mobile workflows remain checked in to minimize rebase conflicts,
 but are disabled in the personal fork's GitHub Actions settings.
