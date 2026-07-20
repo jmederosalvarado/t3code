@@ -31,26 +31,21 @@ The fork source fixes the desktop identity as:
 
 - application ID `com.jmederosalvarado.t3code`
 - product name `T3 Code JM`
-- macOS passkeys disabled
+- macOS passkey signing unused
 
-The release workflow sets `T3CODE_DESKTOP_UPDATE_REPOSITORY=jmederosalvarado/t3code`, using the
-upstream-supported build option to point Electron updates at the fork. Disabling macOS passkeys keeps
-Developer ID signing independent of the upstream Clerk configuration.
+Linux AppImage builds use `T3CODE_DESKTOP_UPDATE_REPOSITORY=jmederosalvarado/t3code`, pointing
+automatic updates at the fork through the upstream-supported build option. macOS builds intentionally
+omit update metadata because unsigned macOS applications cannot install automatic updates.
 
-## macOS signing
+## macOS installation and updates
 
-Unsigned artifacts are published while signing is unconfigured, but macOS automatic updates require
-a consistently signed application. Add these repository secrets before treating the channel as ready
-for automatic updates:
+The macOS artifacts are unsigned and unnotarized because this fork does not use a paid Apple Developer
+Program account. GitHub Releases remain the download channel, but macOS upgrades are manual: download
+the new DMG and replace the existing application.
 
-- `CSC_LINK`
-- `CSC_KEY_PASSWORD`
-- `APPLE_API_KEY`
-- `APPLE_API_KEY_ID`
-- `APPLE_API_ISSUER`
-
-`CSC_LINK` is the exported Developer ID Application certificate and private key. `APPLE_API_KEY` is
-the raw App Store Connect API `.p8` key text used for notarization.
+On first launch, macOS Gatekeeper will identify the application as coming from an unidentified
+developer. Only after verifying the release source, use **System Settings > Privacy & Security > Open
+Anyway** to approve it. Linux AppImage releases continue to support in-app automatic updates.
 
 ## Manual conflict recovery
 

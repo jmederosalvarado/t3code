@@ -36,7 +36,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.jmederosalvarado.t3code";
-const MAC_PASSKEYS_ENABLED: boolean = false;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -760,22 +759,6 @@ export function resolveMacPasskeySigningConfiguration(
   };
 }
 
-export function renderMacRuntimeEntitlements(): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-  </dict>
-</plist>
-`;
-}
-
 function escapeXml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -1396,10 +1379,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
-  macSigning:
+  macPasskeySigning:
     | {
         readonly entitlementsPath: string;
-        readonly provisioningProfilePath?: string;
+        readonly provisioningProfilePath: string;
       }
     | undefined,
 ) {
@@ -1426,7 +1409,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     asarUnpack: [...DESKTOP_ASAR_UNPACK, "apps/server/dist/**", "**/node_modules/**"],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
-  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+  const publishConfig =
+    platform === "mac" ? undefined : yield* resolveGitHubPublishConfig(updateChannel);
   if (publishConfig) {
     buildConfig.publish = [publishConfig];
   } else if (mockUpdates) {
@@ -1449,12 +1433,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           schemes: ["t3code", "t3code-dev"],
         },
       ],
-      ...(macSigning
+      ...(macPasskeySigning
         ? {
-            entitlements: macSigning.entitlementsPath,
-            ...(macSigning.provisioningProfilePath
-              ? { provisioningProfile: macSigning.provisioningProfilePath }
-              : {}),
+            entitlements: macPasskeySigning.entitlementsPath,
+            provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
         : {}),
     };
@@ -1721,7 +1703,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
 
   const configuredMacPasskeySigning =
-    options.platform === "mac" && options.signed && MAC_PASSKEYS_ENABLED
+    options.platform === "mac" && options.signed
       ? yield* Effect.try({
           try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
@@ -1736,10 +1718,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         ),
       }
     : undefined;
-  const macEntitlementsPath =
-    options.platform === "mac" && options.signed
-      ? path.join(stageAppDir, "entitlements.mac.plist")
-      : undefined;
+  const macEntitlementsPath = macPasskeySigning
+    ? path.join(stageAppDir, "entitlements.mac.plist")
+    : undefined;
   if (macPasskeySigning && macEntitlementsPath) {
     if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
       return yield* new MacProvisioningProfileNotFoundError({
@@ -1747,8 +1728,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       });
     }
     yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
-  } else if (macEntitlementsPath) {
-    yield* fs.writeFileString(macEntitlementsPath, renderMacRuntimeEntitlements());
   }
 
   const stageDependencies = {
@@ -1792,12 +1771,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      macEntitlementsPath
+      macPasskeySigning && macEntitlementsPath
         ? {
             entitlementsPath: macEntitlementsPath,
-            ...(macPasskeySigning
-              ? { provisioningProfilePath: macPasskeySigning.provisioningProfilePath }
-              : {}),
+            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
     ),

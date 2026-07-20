@@ -64,8 +64,6 @@ jobs:
     needs: preflight
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    env:
-      T3CODE_DESKTOP_UPDATE_REPOSITORY: jmederosalvarado/t3code
     strategy:
       fail-fast: false
       matrix:
@@ -116,11 +114,7 @@ jobs:
       - name: Build desktop artifact
         shell: bash
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: jmederosalvarado/t3code
         run: |
           set -euo pipefail
           args=(
@@ -130,18 +124,6 @@ jobs:
             --build-version "${{ needs.preflight.outputs.version }}"
             --verbose
           )
-
-          if [[ "${{ matrix.platform }}" == "mac" ]]; then
-            if [[ -n "${CSC_LINK:-}" && -n "${CSC_KEY_PASSWORD:-}" && -n "${APPLE_API_KEY:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER:-}" ]]; then
-              key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-              printf '%s' "$APPLE_API_KEY" > "$key_path"
-              export APPLE_API_KEY="$key_path"
-              args+=(--signed)
-              echo "macOS signing and notarization enabled."
-            else
-              echo "macOS artifact will be unsigned until Apple signing secrets are configured."
-            fi
-          fi
 
           vp run dist:desktop:artifact "${args[@]}"
 
@@ -161,12 +143,6 @@ jobs:
               cp "$file" release-publish/
             done
           done
-
-          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
-            for manifest in release-publish/*-mac.yml; do
-              mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"
-            done
-          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -189,32 +165,12 @@ jobs:
           ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
 
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=@t3tools/scripts...
-
       - name: Download desktop artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: jm-desktop-*
           merge-multiple: true
           path: release-assets
-
-      - name: Merge macOS updater manifests
-        run: |
-          shopt -s nullglob
-          for x64_manifest in release-assets/*-mac-x64.yml; do
-            arm64_manifest="${x64_manifest%-x64.yml}.yml"
-            if [[ -f "$arm64_manifest" ]]; then
-              node scripts/merge-update-manifests.ts --platform mac "$arm64_manifest" "$x64_manifest"
-              rm -f "$x64_manifest"
-            fi
-          done
 
       - name: Create release notes
         shell: bash

@@ -22,7 +22,6 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   renderMacPasskeyEntitlements,
-  renderMacRuntimeEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
@@ -382,13 +381,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
   });
 
-  it("renders signed macOS runtime entitlements without passkey infrastructure", () => {
-    const runtimeEntitlements = renderMacRuntimeEntitlements();
-
-    assert.include(runtimeEntitlements, "<key>com.apple.security.cs.allow-jit</key>");
-    assert.notInclude(runtimeEntitlements, "com.apple.developer.associated-domains");
-  });
-
   it("rejects incomplete macOS passkey signing configuration", () => {
     const captureError = (env: Readonly<Record<string, string | undefined>>) => {
       try {
@@ -488,16 +480,26 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it.effect("keeps runtime entitlements without a provisioning profile", () =>
+  it.effect("omits automatic update metadata from unsigned macOS builds", () =>
     Effect.gen(function* () {
-      const config = yield* createBuildConfig("mac", "dmg", "1.0.42", true, false, undefined, {
-        entitlementsPath: "/tmp/entitlements.mac.plist",
-      });
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.0.42",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
 
-      const mac = config.mac as Record<string, unknown>;
-      assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
-      assert.notProperty(mac, "provisioningProfile");
-    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+      assert.notProperty(config, "publish");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "jmederosalvarado/t3code" } }),
+        ),
+      ),
+    ),
   );
 
   it.effect("keeps executable resource editing enabled for unsigned Windows builds", () =>
