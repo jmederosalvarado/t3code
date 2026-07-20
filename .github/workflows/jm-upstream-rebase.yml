@@ -1,0 +1,309 @@
+name: JM Upstream Release Mirror
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+
+concurrency:
+  group: jm-upstream-release-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Rebase and mirror next upstream release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SOURCE_REPOSITORY: pingdotgg/t3code
+      # Start with upstream nightly 857 already acknowledged, so the first mirror is nightly 858.
+      UPSTREAM_RELEASE_BASELINE_ID: "356724840"
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - id: release
+        name: Resolve next unpublished upstream release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pending=false
+
+          active_release_count="$(
+            gh run list --workflow jm-release.yml --limit 20 --json status \
+              --jq '[.[] | select(.status != "completed")] | length'
+          )"
+          if [[ "$active_release_count" -gt 0 ]]; then
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+            echo "A fork release workflow is already queued or running."
+            exit 0
+          fi
+
+          declare -A mirrored_tags=()
+          while read -r mirrored_tag; do
+            if [[ -n "$mirrored_tag" ]]; then
+              mirrored_tags["$mirrored_tag"]=1
+            fi
+          done < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name'
+          )
+
+          while IFS=$'\t' read -r published_at release_id upstream_tag upstream_prerelease; do
+            if [[ ! "$upstream_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "Ignoring unsupported upstream release tag $upstream_tag."
+              continue
+            fi
+
+            fork_tag="jm-$upstream_tag"
+            if [[ -n "${mirrored_tags[$fork_tag]:-}" ]]; then
+              continue
+            fi
+
+            if [[ "$upstream_tag" == *-nightly.* ]]; then
+              channel=nightly
+            else
+              channel=stable
+            fi
+
+            fork_tag_exists=false
+            if git ls-remote --exit-code --tags origin "refs/tags/$fork_tag" >/dev/null 2>&1; then
+              fork_tag_exists=true
+            fi
+
+            pending=true
+            {
+              echo "pending=true"
+              echo "release_id=$release_id"
+              echo "published_at=$published_at"
+              echo "upstream_tag=$upstream_tag"
+              echo "fork_tag=$fork_tag"
+              echo "version=${upstream_tag#v}"
+              echo "channel=$channel"
+              echo "upstream_prerelease=$upstream_prerelease"
+              echo "fork_tag_exists=$fork_tag_exists"
+            } >> "$GITHUB_OUTPUT"
+            break
+          done < <(
+            gh api --paginate "repos/$SOURCE_REPOSITORY/releases?per_page=100" \
+              --jq ".[] | select(.draft == false and .id > $UPSTREAM_RELEASE_BASELINE_ID) | [.published_at, .id, .tag_name, .prerelease] | @tsv" \
+              | sort
+          )
+
+          if [[ "$pending" == false ]]; then
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+            echo "No unpublished upstream releases are pending."
+          fi
+
+      - name: Fetch fork tracking branches and release tag
+        if: steps.release.outputs.pending == 'true'
+        shell: bash
+        env:
+          FORK_TAG: ${{ steps.release.outputs.fork_tag }}
+          FORK_TAG_EXISTS: ${{ steps.release.outputs.fork_tag_exists }}
+          UPSTREAM_TAG: ${{ steps.release.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          git remote add source "https://github.com/$SOURCE_REPOSITORY.git"
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            +refs/heads/upstream:refs/remotes/origin/upstream
+
+          if [[ "$FORK_TAG_EXISTS" == true ]]; then
+            git fetch origin "+refs/tags/$FORK_TAG:refs/tags/$FORK_TAG"
+          else
+            git fetch source "+refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
+          fi
+
+      - id: rebase
+        name: Rebase custom patch stack onto upstream release
+        if: steps.release.outputs.pending == 'true'
+        shell: bash
+        env:
+          FORK_TAG: ${{ steps.release.outputs.fork_tag }}
+          FORK_TAG_EXISTS: ${{ steps.release.outputs.fork_tag_exists }}
+          UPSTREAM_TAG: ${{ steps.release.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          old_main="$(git rev-parse origin/main)"
+          old_upstream="$(git rev-parse origin/upstream)"
+
+          {
+            echo "old_main=$old_main"
+            echo "old_upstream=$old_upstream"
+            echo "conflict=false"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$FORK_TAG_EXISTS" == true ]]; then
+            {
+              echo "changed=false"
+              echo "candidate_sha=$(git rev-parse "$FORK_TAG^{commit}")"
+              echo "new_upstream=$old_upstream"
+              echo "retry_release=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          new_upstream="$(git rev-parse "$UPSTREAM_TAG^{commit}")"
+          {
+            echo "new_upstream=$new_upstream"
+            echo "retry_release=false"
+          } >> "$GITHUB_OUTPUT"
+
+          if ! git merge-base --is-ancestor "$old_upstream" "$old_main"; then
+            echo "The recorded upstream base is not an ancestor of fork main." >&2
+            exit 1
+          fi
+
+          if [[ "$old_upstream" == "$new_upstream" ]]; then
+            {
+              echo "changed=false"
+              echo "candidate_sha=$old_main"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create jm-release-candidate "$old_main"
+
+          if git rebase --onto "$new_upstream" "$old_upstream"; then
+            {
+              echo "changed=true"
+              echo "candidate_sha=$(git rev-parse HEAD)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --name-only --diff-filter=U > "$RUNNER_TEMP/jm-rebase-conflicts.txt"
+          git rebase --abort
+          echo "conflict=true" >> "$GITHUB_OUTPUT"
+
+      - name: Report rebase conflict
+        if: steps.rebase.outputs.conflict == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD_UPSTREAM: ${{ steps.rebase.outputs.old_upstream }}
+          NEW_UPSTREAM: ${{ steps.rebase.outputs.new_upstream }}
+          UPSTREAM_TAG: ${{ steps.release.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          title="Automated upstream release rebase blocked at $UPSTREAM_TAG"
+          body_file="$RUNNER_TEMP/jm-rebase-issue.md"
+          {
+            echo "The fork patch stack could not be rebased onto upstream release \`$UPSTREAM_TAG\`."
+            echo
+            echo "- Previous upstream: \`$OLD_UPSTREAM\`"
+            echo "- Release upstream: \`$NEW_UPSTREAM\`"
+            echo "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "Conflicting files:"
+            echo '```text'
+            cat "$RUNNER_TEMP/jm-rebase-conflicts.txt"
+            echo '```'
+          } > "$body_file"
+
+          issue_number="$(
+            gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty'
+          )"
+          if [[ -z "$issue_number" ]]; then
+            gh issue create --title "$title" --body-file "$body_file"
+          else
+            echo "Conflict issue #$issue_number is already open."
+          fi
+
+      - name: Stop after rebase conflict
+        if: steps.rebase.outputs.conflict == 'true'
+        run: exit 1
+
+      - name: Setup Vite+
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Check rebased tree
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        run: vp check
+
+      - name: Typecheck desktop release packages
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        run: vp run --filter @t3tools/desktop --filter t3 --filter @t3tools/web typecheck
+
+      - name: Build desktop pipeline
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        run: vp run build:desktop
+
+      - name: Test fork release behavior
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        run: >-
+          vp test run
+          scripts/build-desktop-artifact.test.ts
+          apps/desktop/src/electron/ElectronUpdater.test.ts
+          apps/desktop/src/updates/DesktopUpdates.test.ts
+
+      - name: Exercise release-only workflow steps
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        run: node scripts/release-smoke.ts
+
+      - name: Update fork base and tag release candidate
+        if: steps.release.outputs.fork_tag_exists == 'false'
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.rebase.outputs.candidate_sha }}
+          FORK_TAG: ${{ steps.release.outputs.fork_tag }}
+          NEW_UPSTREAM: ${{ steps.rebase.outputs.new_upstream }}
+          OLD_MAIN: ${{ steps.rebase.outputs.old_main }}
+          OLD_UPSTREAM: ${{ steps.rebase.outputs.old_upstream }}
+          REBASE_CHANGED: ${{ steps.rebase.outputs.changed }}
+        run: |
+          set -euo pipefail
+          git tag "$FORK_TAG" "$CANDIDATE_SHA"
+
+          if [[ "$REBASE_CHANGED" == true ]]; then
+            git branch --force jm-upstream-track "$NEW_UPSTREAM"
+            git push --atomic \
+              --force-with-lease=refs/heads/main:"$OLD_MAIN" \
+              --force-with-lease=refs/heads/upstream:"$OLD_UPSTREAM" \
+              origin \
+              "$CANDIDATE_SHA":refs/heads/main \
+              jm-upstream-track:refs/heads/upstream \
+              "refs/tags/$FORK_TAG:refs/tags/$FORK_TAG"
+          else
+            git push origin "refs/tags/$FORK_TAG:refs/tags/$FORK_TAG"
+          fi
+
+      - name: Dispatch matching fork release
+        if: steps.release.outputs.pending == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.rebase.outputs.candidate_sha }}
+          CHANNEL: ${{ steps.release.outputs.channel }}
+          UPSTREAM_PRERELEASE: ${{ steps.release.outputs.upstream_prerelease }}
+          UPSTREAM_TAG: ${{ steps.release.outputs.upstream_tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: >-
+          gh workflow run jm-release.yml
+          --ref main
+          -f channel="$CHANNEL"
+          -f version="$VERSION"
+          -f expected_sha="$CANDIDATE_SHA"
+          -f upstream_tag="$UPSTREAM_TAG"
+          -f upstream_prerelease="$UPSTREAM_PRERELEASE"
+          -f source=upstream-release

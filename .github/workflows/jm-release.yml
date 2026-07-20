@@ -1,0 +1,266 @@
+name: JM Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - nightly
+      version:
+        description: Exact version to publish; upstream mirrors pass the upstream version
+        required: false
+        type: string
+      expected_sha:
+        description: Exact fork commit to release
+        required: false
+        type: string
+      upstream_tag:
+        description: Source upstream release tag
+        required: false
+        type: string
+      upstream_prerelease:
+        description: Preserve the upstream GitHub prerelease flag
+        required: false
+        default: false
+        type: boolean
+      source:
+        description: Release trigger source
+        required: false
+        default: manual
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jm-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Resolve release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      channel: ${{ steps.meta.outputs.channel }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      name: ${{ steps.meta.outputs.name }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      make_latest: ${{ steps.meta.outputs.make_latest }}
+      ref: ${{ steps.meta.outputs.ref }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.expected_sha || github.sha }}
+          fetch-depth: 0
+
+      - id: meta
+        name: Resolve immutable release metadata
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          RELEASE_CHANNEL: ${{ inputs.channel || 'stable' }}
+          UPSTREAM_PRERELEASE: ${{ inputs.upstream_prerelease }}
+        run: |
+          set -euo pipefail
+          release_sha="$(git rev-parse HEAD)"
+          if [[ -n "${EXPECTED_SHA:-}" && "$release_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Expected $EXPECTED_SHA but checked out $release_sha." >&2
+            exit 1
+          fi
+
+          if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+            version="${REQUESTED_VERSION#v}"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid release version: $REQUESTED_VERSION" >&2
+              exit 1
+            fi
+          else
+            version="1.0.${GITHUB_RUN_NUMBER}"
+            if [[ "$RELEASE_CHANNEL" == nightly ]]; then
+              nightly_date="$(date -u +%Y%m%d)"
+              version="$version-nightly.${nightly_date}.${GITHUB_RUN_NUMBER}"
+            fi
+          fi
+
+          case "$RELEASE_CHANNEL" in
+            stable)
+              name="T3 Code JM v$version"
+              ;;
+            nightly)
+              name="T3 Code JM Nightly $version"
+              ;;
+            *)
+              echo "Unsupported release channel: $RELEASE_CHANNEL" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$RELEASE_CHANNEL" == nightly || "$UPSTREAM_PRERELEASE" == true ]]; then
+            prerelease=true
+            make_latest=false
+          else
+            prerelease=false
+            make_latest=true
+          fi
+
+          {
+            echo "channel=$RELEASE_CHANNEL"
+            echo "version=$version"
+            echo "tag=jm-v$version"
+            echo "name=$name"
+            echo "prerelease=$prerelease"
+            echo "make_latest=$make_latest"
+            echo "ref=$release_sha"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            runner: macos-26
+            platform: mac
+            target: dmg
+            arch: arm64
+          - label: macOS x64
+            runner: macos-26-intel
+            platform: mac
+            target: dmg
+            arch: x64
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Build desktop artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --platform "${{ matrix.platform }}"
+            --target "${{ matrix.target }}"
+            --arch "${{ matrix.arch }}"
+            --build-version "${{ needs.preflight.outputs.version }}"
+            --verbose
+          )
+
+          vp run dist:desktop:artifact "${args[@]}"
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for pattern in \
+            "release/*.dmg" \
+            "release/*.zip"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: jm-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: jm-desktop-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Create release notes
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_CHANNEL: ${{ needs.preflight.outputs.channel }}
+          RELEASE_SHA: ${{ needs.preflight.outputs.ref }}
+          RELEASE_SOURCE: ${{ inputs.source || github.event_name }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/upstream:refs/remotes/origin/upstream
+          upstream_sha="$(git rev-parse origin/upstream)"
+          notes="$RUNNER_TEMP/jm-release-notes.md"
+          {
+            echo "Personal T3 Code build based on the latest synchronized upstream source."
+            echo
+            echo "- Fork version: \`$VERSION\`"
+            echo "- Channel: \`$RELEASE_CHANNEL\`"
+            echo "- Fork commit: \`$RELEASE_SHA\`"
+            echo "- Upstream commit: \`$upstream_sha\`"
+            if [[ -n "${UPSTREAM_TAG:-}" ]]; then
+              echo "- Upstream release: [\`$UPSTREAM_TAG\`](https://github.com/pingdotgg/t3code/releases/tag/$UPSTREAM_TAG)"
+            fi
+            echo "- Trigger: \`$RELEASE_SOURCE\`"
+            echo
+            echo "### Custom patch stack"
+            echo
+            # shellcheck disable=SC2016
+            git log --format='- %s (`%h`)' "${upstream_sha}..${RELEASE_SHA}"
+          } > "$notes"
+          echo "notes=$notes" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          name: ${{ needs.preflight.outputs.name }}
+          body_path: ${{ env.notes }}
+          prerelease: ${{ needs.preflight.outputs.prerelease }}
+          make_latest: ${{ needs.preflight.outputs.make_latest }}
+          files: |
+            release-assets/*.dmg
+            release-assets/*.zip
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}

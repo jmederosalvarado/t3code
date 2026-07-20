@@ -21,6 +21,23 @@
 - `packages/shared`: Shared runtime utilities consumed by both server and client applications. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.
 - `packages/client-runtime`: Shared runtime package for sharing client code across web and mobile.
 
+## Personal Fork
+
+This repository (`jmederosalvarado/t3code`) is a personal fork of upstream `pingdotgg/t3code`,
+maintained as a linear custom patch stack. Read `docs/operations/personal-fork-release.md` before
+touching the branch model, release workflows, or desktop identity.
+
+- Do custom work on `agent/*` branches; keep the patch stack minimal and avoid editing upstream files,
+  since every fork change is a potential conflict when the stack is rebased onto a new upstream release.
+  Merge pull requests with **Squash and merge** only.
+- Commits that add custom fork functionality must have commit messages that fully capture the patch's
+  intent — the problem it solves, the approach, and any context needed to reproduce it — so the change
+  can be re-derived from the message alone when a rebase onto a new upstream release hits a conflict.
+- Fork automation lives in `.github/workflows/jm-*.yml`; upstream workflows stay checked in but are
+  disabled in the fork's Actions settings — leave them in place.
+- Desktop identity is intentionally forked; see `scripts/build-desktop-artifact.ts` and
+  `apps/desktop/package.json`. Do not revert these to upstream values.
+
 ## Reference Repos
 
 - Open-source Codex repo: https://github.com/openai/codex
