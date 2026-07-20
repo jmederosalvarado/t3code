@@ -183,5 +183,6 @@ jobs:
         run: >-
           gh workflow run jm-release.yml
           --ref main
+          -f channel=nightly
           -f expected_sha="$CANDIDATE_SHA"
           -f source=upstream-rebase
