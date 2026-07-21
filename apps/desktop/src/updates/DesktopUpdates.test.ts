@@ -16,6 +16,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -30,6 +31,7 @@ interface UpdatesHarnessOptions {
   readonly setUpdateChannelError?: DesktopAppSettings.DesktopSettingsWriteError;
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly stopBackend?: Effect.Effect<void>;
+  readonly openExternal?: (url: unknown) => Effect.Effect<boolean>;
   readonly env?: Record<string, string | undefined>;
 }
 
@@ -60,6 +62,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     }
   };
 
+  const openedExternalUrls: unknown[] = [];
   const updaterLayer = Layer.succeed(ElectronUpdater.ElectronUpdater, {
     setFeedURL: (options) =>
       Effect.sync(() => {
@@ -95,6 +98,16 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
           }),
       ).pipe(Effect.asVoid),
   } satisfies ElectronUpdater.ElectronUpdater["Service"]);
+
+  const shellLayer = Layer.succeed(ElectronShell.ElectronShell, {
+    openExternal: (url) =>
+      options.openExternal?.(url) ??
+      Effect.sync(() => {
+        openedExternalUrls.push(url);
+        return true;
+      }),
+    copyText: () => Effect.void,
+  } satisfies ElectronShell.ElectronShell["Service"]);
 
   const windowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: () => Effect.die("unexpected BrowserWindow creation"),
@@ -172,6 +185,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   const layer = DesktopUpdates.layer.pipe(
     Layer.provideMerge(updaterLayer),
+    Layer.provideMerge(shellLayer),
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
     Layer.provideMerge(DesktopState.layer),
@@ -193,6 +207,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     checkCount: () => checkCount,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
+    openedExternalUrls: () => openedExternalUrls,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(
         (total, eventListeners) => total + eventListeners.size,
@@ -208,6 +223,44 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 }
 
 describe("DesktopUpdates", () => {
+  it("opens the fork GitHub release page for unsigned macOS updates", () => {
+    assert.equal(
+      DesktopUpdates.shouldOpenGithubReleaseForMacUpdate("darwin", {
+        provider: "github",
+        owner: "jmederosalvarado",
+      }),
+      true,
+    );
+    assert.equal(
+      DesktopUpdates.shouldOpenGithubReleaseForMacUpdate("darwin", {
+        provider: "github",
+        owner: "pingdotgg",
+      }),
+      false,
+    );
+    assert.equal(
+      DesktopUpdates.shouldOpenGithubReleaseForMacUpdate("win32", {
+        provider: "github",
+        owner: "jmederosalvarado",
+      }),
+      false,
+    );
+    assert.equal(
+      DesktopUpdates.resolveGithubReleasePageUrl(
+        { provider: "github", owner: "jmederosalvarado", repo: "t3code" },
+        "0.0.29-nightly.20260721.860",
+      ),
+      "https://github.com/jmederosalvarado/t3code/releases/tag/jm-v0.0.29-nightly.20260721.860",
+    );
+    assert.equal(
+      DesktopUpdates.resolveGithubReleasePageUrl(
+        { provider: "github", owner: "pingdotgg", repo: "t3code" },
+        "0.0.29",
+      ),
+      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.29",
+    );
+  });
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

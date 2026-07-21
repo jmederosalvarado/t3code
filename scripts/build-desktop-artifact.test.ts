@@ -480,19 +480,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it.effect("omits automatic update metadata from unsigned macOS builds", () =>
+  it.effect("embeds GitHub update publish metadata for macOS builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(
         "mac",
         "dmg",
-        "1.0.42",
+        "1.0.42-nightly.20260721.1",
         false,
         false,
         undefined,
         undefined,
       );
 
-      assert.notProperty(config, "publish");
+      assert.deepStrictEqual(config.publish, [
+        {
+          provider: "github",
+          owner: "jmederosalvarado",
+          repo: "t3code",
+          releaseType: "prerelease",
+          channel: "nightly",
+        },
+      ]);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
