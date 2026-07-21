@@ -24,17 +24,29 @@ jobs:
       # Start with upstream nightly 857 already acknowledged, so the first mirror is nightly 858.
       UPSTREAM_RELEASE_BASELINE_ID: "356724840"
     steps:
+      # GITHUB_TOKEN cannot push commits that touch .github/workflows/*; use a
+      # fine-grained PAT (Contents + Workflows + Actions + Issues: write).
+      - name: Require JM_MIRROR_TOKEN
+        env:
+          JM_MIRROR_TOKEN: ${{ secrets.JM_MIRROR_TOKEN }}
+        run: |
+          if [[ -z "${JM_MIRROR_TOKEN}" ]]; then
+            echo "Set repo secret JM_MIRROR_TOKEN (fine-grained PAT with contents+workflows+actions+issues write)." >&2
+            exit 1
+          fi
+
       - name: Checkout fork main
         uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.JM_MIRROR_TOKEN }}
 
       - id: release
         name: Resolve next unpublished upstream release
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.JM_MIRROR_TOKEN }}
         run: |
           set -euo pipefail
           pending=false
@@ -192,7 +204,7 @@ jobs:
         if: steps.rebase.outputs.conflict == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.JM_MIRROR_TOKEN }}
           OLD_UPSTREAM: ${{ steps.rebase.outputs.old_upstream }}
           NEW_UPSTREAM: ${{ steps.rebase.outputs.new_upstream }}
           UPSTREAM_TAG: ${{ steps.release.outputs.upstream_tag }}
@@ -292,7 +304,7 @@ jobs:
       - name: Dispatch matching fork release
         if: steps.release.outputs.pending == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.JM_MIRROR_TOKEN }}
           CANDIDATE_SHA: ${{ steps.rebase.outputs.candidate_sha }}
           CHANNEL: ${{ steps.release.outputs.channel }}
           UPSTREAM_PRERELEASE: ${{ steps.release.outputs.upstream_prerelease }}

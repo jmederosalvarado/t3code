@@ -20,7 +20,9 @@ linear patch stack.
 
 - `jm-ci.yml` verifies custom pull requests.
 - `jm-upstream-rebase.yml` polls upstream GitHub Releases every 15 minutes, rebases onto the exact
-  release tag commit, and dispatches the matching fork release.
+  release tag commit, and dispatches the matching fork release. It requires the repo secret
+  `JM_MIRROR_TOKEN` (fine-grained PAT with Contents, Workflows, Actions, and Issues write) because
+  `GITHUB_TOKEN` cannot push commits that update `.github/workflows/*`.
 - `jm-release.yml` publishes macOS arm64 and macOS x64 artifacts to `jmederosalvarado/t3code`
   GitHub Releases.
 
