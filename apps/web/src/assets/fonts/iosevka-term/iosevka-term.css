@@ -1,0 +1,17 @@
+/* Iosevka Term webfonts from be5invis/Iosevka v34.7.0 (PkgWebFont-IosevkaTerm). OFL-1.1. */
+
+@font-face {
+  font-family: "Iosevka Term";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("./IosevkaTerm-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Iosevka Term";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("./IosevkaTerm-Medium.woff2") format("woff2");
+}

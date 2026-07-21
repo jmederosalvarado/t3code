@@ -6,30 +6,12 @@ settings:
 
 catalogs:
   default:
-    '@effect/openapi-generator':
-      specifier: 4.0.0-beta.78
-      version: 4.0.0-beta.78
-    '@effect/tsgo':
-      specifier: 0.13.2
-      version: 0.13.2
-    '@noble/curves':
-      specifier: 1.9.1
-      version: 1.9.1
-    '@noble/hashes':
-      specifier: 1.8.0
-      version: 1.8.0
     '@pierre/diffs':
       specifier: 1.3.0-beta.5
       version: 1.3.0-beta.5
-    '@typescript/native-preview':
-      specifier: 7.0.0-dev.20260604.1
-      version: 7.0.0-dev.20260604.1
     jose:
       specifier: 6.2.2
       version: 6.2.2
-    typescript:
-      specifier: ~6.0.3
-      version: 6.0.3
     vite-plus:
       specifier: 0.2.2
       version: 0.2.2
@@ -526,12 +508,12 @@ importers:
       '@effect/atom-react':
         specifier: 4.0.0-beta.78
         version: 4.0.0-beta.78(effect@4.0.0-beta.78(patch_hash=c502bc684210b707dfceb87d8fe6ad6843395af6e19cfc02cd65854898bde2c5))(react@19.2.6)(scheduler@0.27.0)
-      '@fontsource-variable/dm-sans':
-        specifier: ^5.2.8
-        version: 5.2.8
-      '@fontsource/jetbrains-mono':
-        specifier: ^5.2.8
-        version: 5.2.8
+      '@fontsource/iosevka':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/iosevka-aile':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@formkit/auto-animate':
         specifier: ^0.9.0
         version: 0.9.0
@@ -2687,11 +2669,11 @@ packages:
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
 
-  '@fontsource-variable/dm-sans@5.2.8':
-    resolution: {integrity: sha512-AxkvMTvNWgfrmlyjiV05vlHYJa+nRQCf1EfvIrQAPBpFJW0O9VTz7oAFr9S3lvbWdmnFoBk7yFqQL86u64nl2g==}
+  '@fontsource/iosevka-aile@5.3.0':
+    resolution: {integrity: sha512-XwbV3etYsHR0WZlMRJ4sXKdPSE764dQaC9lrM5qoN/yCd2BDbT8WDCJldTflOT0wbCDzS8VKll+oyTgfSgmG6g==}
 
-  '@fontsource/jetbrains-mono@5.2.8':
-    resolution: {integrity: sha512-6w8/SG4kqvIMu7xd7wt6x3idn1Qux3p9N62s6G3rfldOUYHpWcc2FKrqf+Vo44jRvqWj2oAtTHrZXEP23oSKwQ==}
+  '@fontsource/iosevka@5.3.0':
+    resolution: {integrity: sha512-RcG0v/65e4PTuThR/d7n9jj6PLlex7YUGaLa4ZpL+NnqArWQmD8Z+6gYBTxPMVWxYMRcEw6OF4rdt8XisnC5zA==}
 
   '@formkit/auto-animate@0.9.0':
     resolution: {integrity: sha512-VhP4zEAacXS3dfTpJpJ88QdLqMTcabMg0jwpOSxZ/VzfQVfl3GkZSCZThhGC5uhq/TxPHPzW0dzr4H9Bb1OgKA==}
@@ -12692,9 +12674,9 @@ snapshots:
 
   '@floating-ui/utils@0.2.11': {}
 
-  '@fontsource-variable/dm-sans@5.2.8': {}
+  '@fontsource/iosevka-aile@5.3.0': {}
 
-  '@fontsource/jetbrains-mono@5.2.8': {}
+  '@fontsource/iosevka@5.3.0': {}
 
   '@formkit/auto-animate@0.9.0': {}
 
