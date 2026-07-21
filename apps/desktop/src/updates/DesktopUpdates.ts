@@ -23,6 +23,7 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
@@ -41,6 +42,36 @@ import {
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine.ts";
+
+/** Personal-fork releases use `jm-v*` tags and ship unsigned macOS builds. */
+const FORK_GITHUB_UPDATE_OWNER = "jmederosalvarado";
+const FORK_GITHUB_RELEASE_TAG_PREFIX = "jm-v";
+
+export function shouldOpenGithubReleaseForMacUpdate(
+  platform: NodeJS.Platform,
+  config: { readonly provider?: string; readonly owner?: string },
+): boolean {
+  // Squirrel.Mac cannot install updates into unsigned apps, so the fork opens
+  // the GitHub release page instead of downloading/installing in-process.
+  return (
+    platform === "darwin" &&
+    config.provider === "github" &&
+    config.owner === FORK_GITHUB_UPDATE_OWNER
+  );
+}
+
+export function resolveGithubReleasePageUrl(
+  config: { readonly provider?: string; readonly owner?: string; readonly repo?: string },
+  version: string,
+): string | null {
+  if (config.provider !== "github") return null;
+  const owner = config.owner?.trim();
+  const repo = config.repo?.trim();
+  const trimmedVersion = version.trim();
+  if (!owner || !repo || !trimmedVersion) return null;
+  const tagPrefix = owner === FORK_GITHUB_UPDATE_OWNER ? FORK_GITHUB_RELEASE_TAG_PREFIX : "v";
+  return `https://github.com/${owner}/${repo}/releases/tag/${tagPrefix}${trimmedVersion}`;
+}
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
@@ -248,6 +279,7 @@ export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const desktopState = yield* DesktopState.DesktopState;
+  const electronShell = yield* ElectronShell.ElectronShell;
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -395,6 +427,39 @@ export const make = Effect.gen(function* () {
       state.status !== "available"
     ) {
       return { accepted: false, completed: false };
+    }
+
+    const appUpdateYmlConfig = yield* Ref.get(appUpdateYmlConfigRef);
+    if (
+      Option.isSome(appUpdateYmlConfig) &&
+      shouldOpenGithubReleaseForMacUpdate(environment.platform, appUpdateYmlConfig.value)
+    ) {
+      const releaseUrl = state.availableVersion
+        ? resolveGithubReleasePageUrl(appUpdateYmlConfig.value, state.availableVersion)
+        : null;
+      if (!releaseUrl) {
+        yield* logUpdaterError("unable to resolve GitHub release page for update", {
+          version: state.availableVersion,
+        });
+        return { accepted: false, completed: false };
+      }
+
+      const opened = yield* electronShell.openExternal(releaseUrl);
+      if (!opened) {
+        yield* updateState((current) =>
+          reduceDesktopUpdateStateOnDownloadFailure(
+            current,
+            `Failed to open the release page for ${state.availableVersion}.`,
+          ),
+        );
+        return { accepted: true, completed: false };
+      }
+
+      yield* logUpdaterInfo("opened GitHub release page for unsigned macOS update", {
+        version: state.availableVersion,
+        releaseUrl,
+      });
+      return { accepted: true, completed: true };
     }
 
     yield* Ref.set(updateDownloadInFlightRef, true);

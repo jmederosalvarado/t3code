@@ -45,19 +45,23 @@ The fork source fixes the desktop identity as:
 - product name `T3 Code JM`
 - macOS passkey signing unused
 
-macOS builds intentionally omit automatic-update metadata because unsigned macOS applications cannot
-install automatic updates. Stable and nightly builds are both downloaded manually from the fork's
-GitHub Releases page.
+macOS builds embed GitHub update-feed metadata (`app-update.yml` plus `latest-mac.yml` /
+`nightly-mac.yml` on each release) so the installed app can detect new versions. Because these
+builds are unsigned, Squirrel.Mac cannot install updates in-place: when an update is available the
+app opens the matching GitHub release page so you can download the DMG and replace the app.
 
 ## macOS installation and updates
 
 The macOS artifacts are unsigned and unnotarized because this fork does not use a paid Apple Developer
-Program account. GitHub Releases remain the download channel, but macOS upgrades are manual: download
-the new DMG and replace the existing application.
+Program account. The app polls GitHub Releases for newer versions on the selected channel. Applying an
+update is still a manual DMG replace (the in-app "download" action opens the release page).
 
 On first launch, macOS Gatekeeper will identify the application as coming from an unidentified
 developer. Only after verifying the release source, use **System Settings > Privacy & Security > Open
 Anyway** to approve it.
+
+Builds published before update-feed metadata was enabled will not detect updates until you install one
+feed-enabled DMG once.
 
 ## Manual conflict recovery
 
